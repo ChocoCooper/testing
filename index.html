@@ -2,97 +2,135 @@
 <html lang="en">
 <head>
     <meta charset="UTF-8">
-    <meta name="viewport" content="width=device-width, initial-scale=1.0">
-    <title>Live Hospital Finder</title>
+    <meta name="viewport" content="width=device-width, initial-scale=1.0, maximum-scale=1.0, user-scalable=no">
+    <title>Nearby Hospitals</title>
     <link rel="stylesheet" href="https://unpkg.com/leaflet@1.9.4/dist/leaflet.css" />
     <style>
-        body { font-family: 'Segoe UI', sans-serif; margin: 0; display: flex; flex-direction: column; height: 100vh; background: #f8f9fa; }
-        #map { height: 50%; width: 100%; box-shadow: 0 2px 10px rgba(0,0,0,0.2); }
-        .container { flex: 1; overflow-y: auto; padding: 15px; }
-        .btn-locate { position: absolute; top: 100px; left: 10px; z-index: 1000; padding: 10px 15px; background: #fff; border: 2px solid #1a73e8; color: #1a73e8; font-weight: bold; cursor: pointer; border-radius: 8px; }
+        * { box-sizing: border-box; }
+        body { font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, Helvetica, Arial, sans-serif; margin: 0; display: flex; flex-direction: column; height: 100vh; background: #f0f2f5; overflow: hidden; }
         
-        /* List & Card Styles */
-        .hospital-grid { display: grid; gap: 15px; margin-top: 10px; }
-        .card { background: white; border-radius: 12px; padding: 15px; box-shadow: 0 2px 5px rgba(0,0,0,0.1); border-left: 6px solid #1a73e8; cursor: pointer; transition: 0.2s; }
-        .card:hover { transform: scale(1.02); }
-        .card h3 { margin: 0 0 5px 0; font-size: 16px; color: #202124; }
-        .card p { margin: 0; font-size: 13px; color: #5f6368; }
-        .tag { display: inline-block; background: #e8f0fe; color: #1a73e8; padding: 2px 8px; border-radius: 5px; font-size: 11px; margin-top: 8px; font-weight: bold; }
+        /* Map styling - Taking 40% of screen */
+        #map { height: 40%; width: 100%; z-index: 1; border-bottom: 2px solid #ddd; }
         
-        /* Pulse Animation for GPS */
-        .user-dot { width: 12px; height: 12px; background: #1a73e8; border: 2px solid white; border-radius: 50%; box-shadow: 0 0 0 5px rgba(26, 115, 232, 0.3); animation: pulse 1.5s infinite; }
-        @keyframes pulse { 0% { box-shadow: 0 0 0 0 rgba(26, 115, 232, 0.7); } 100% { box-shadow: 0 0 0 15px rgba(26, 115, 232, 0); } }
+        /* Hide Leaflet Watermark & Zoom Controls */
+        .leaflet-control-attribution, .leaflet-control-zoom { display: none !important; }
+
+        /* Floating Locate Button */
+        .btn-locate { position: absolute; top: 15px; right: 15px; z-index: 1000; padding: 12px 24px; background: #1a73e8; color: white; border: none; font-weight: bold; cursor: pointer; border-radius: 50px; box-shadow: 0 4px 12px rgba(0,0,0,0.3); font-size: 14px; }
+        .btn-locate:active { background: #1557b0; transform: scale(0.95); }
+
+        /* Bottom List Container */
+        .container { flex: 1; overflow-y: auto; padding: 20px; z-index: 2; -webkit-overflow-scrolling: touch; }
+        #status { font-size: 16px; font-weight: 600; color: #3c4043; margin-top: 0; margin-bottom: 15px; }
+        
+        /* Hospital Cards */
+        .hospital-grid { display: grid; gap: 12px; }
+        .card { background: white; border-radius: 12px; padding: 16px; box-shadow: 0 2px 4px rgba(0,0,0,0.08); border-left: 5px solid #1a73e8; transition: background 0.2s; }
+        .card:active { background: #f8f9fa; }
+        .card h3 { margin: 0 0 4px 0; font-size: 16px; color: #202124; }
+        .card p { margin: 0; font-size: 13px; color: #5f6368; line-height: 1.4; }
+        .directions { display: inline-block; margin-top: 10px; color: #1a73e8; text-decoration: none; font-weight: bold; font-size: 13px; }
+
+        /* Blue Pulse for User Location */
+        .user-dot { width: 14px; height: 14px; background: #1a73e8; border: 2px solid white; border-radius: 50%; box-shadow: 0 0 0 4px rgba(26, 115, 232, 0.3); animation: pulse 2s infinite; }
+        @keyframes pulse { 0% { box-shadow: 0 0 0 0 rgba(26, 115, 232, 0.7); } 100% { box-shadow: 0 0 0 12px rgba(26, 115, 232, 0); } }
     </style>
 </head>
 <body>
 
-    <button class="btn-locate" onclick="getLocation()">📍 Locate Me</button>
+    <button class="btn-locate" onclick="getLocation()">📍 Find Hospitals</button>
     <div id="map"></div>
 
     <div class="container">
-        <h2 id="status">Tap 'Locate Me' to start</h2>
+        <h2 id="status">Allow GPS to find nearby care</h2>
         <div id="hospital-list" class="hospital-grid"></div>
     </div>
 
     <script src="https://unpkg.com/leaflet@1.9.4/dist/leaflet.js"></script>
     <script>
-        let map = L.map('map').setView([13.0827, 80.2707], 12); // Default Chennai
-        let userMarker, radiusCircle, markersLayer = L.layerGroup().addTo(map);
+        let map, markersLayer, userMarker, radiusCircle;
 
-        L.tileLayer('https://{s}.tile.openstreetmap.org/{z}/{x}/{y}.png', {
-            attribution: '© OpenStreetMap'
-        }).addTo(map);
+        // Ensure DOM is loaded before initializing Map
+        document.addEventListener('DOMContentLoaded', () => {
+            map = L.map('map', { zoomControl: false, attributionControl: false }).setView([13.0827, 80.2707], 12);
+            markersLayer = L.featureGroup().addTo(map);
+
+            L.tileLayer('https://{s}.tile.openstreetmap.org/{z}/{x}/{y}.png').addTo(map);
+        });
 
         function getLocation() {
-            document.getElementById('status').innerText = "🛰️ Fetching GPS...";
+            const statusLabel = document.getElementById('status');
+            statusLabel.innerText = "🛰️ Connecting to Satellites...";
+
+            if (location.protocol !== 'https:' && location.hostname !== 'localhost') {
+                alert("GPS requires HTTPS. Please host this on GitHub Pages or use a local server.");
+                statusLabel.innerText = "❌ Insecure Connection";
+                return;
+            }
+
             navigator.geolocation.getCurrentPosition(
-                (pos) => { fetchNearby(pos.coords.latitude, pos.coords.longitude); },
-                (err) => { alert("Please enable GPS/Location access."); document.getElementById('status').innerText = "❌ GPS Denied"; }
+                (pos) => { startSearch(pos.coords.latitude, pos.coords.longitude); },
+                (err) => { 
+                    statusLabel.innerText = "❌ GPS Error: " + err.message;
+                    alert("Please enable Location in your phone settings.");
+                },
+                { enableHighAccuracy: true, timeout: 10000 }
             );
         }
 
-        async function fetchNearby(lat, lon) {
-            const radius = 3000; // 3km radius
-            document.getElementById('status').innerText = "🔍 Scanning 3km radius...";
+        async function startSearch(lat, lon) {
+            const radius = 3000; // 3km Search Radius
+            const statusLabel = document.getElementById('status');
+            statusLabel.innerText = "🔍 Searching OpenStreetMap...";
 
-            // 1. Setup Map UI
-            map.setView([lat, lon], 14);
-            if (userMarker) map.removeLayer(userMarker);
-            if (radiusCircle) map.removeLayer(radiusCircle);
+            // Reset Map Layers
             markersLayer.clearLayers();
+            if(userMarker) map.removeLayer(userMarker);
+            if(radiusCircle) map.removeLayer(radiusCircle);
 
-            // Custom pulsing user icon
-            const pulseIcon = L.divIcon({ className: 'user-dot', iconSize: [12, 12] });
-            userMarker = L.marker([lat, lon], { icon: pulseIcon }).addTo(map).bindPopup("You are here");
-
+            // 1. Add Animated User Location
+            const pulseIcon = L.divIcon({ className: 'user-dot', iconSize: [14, 14], iconAnchor: [7, 7] });
+            userMarker = L.marker([lat, lon], { icon: pulseIcon }).addTo(map);
+            
+            // 2. Add Radius Circle
             radiusCircle = L.circle([lat, lon], {
-                radius: radius, color: '#1a73e8', fillColor: '#1a73e8', fillOpacity: 0.1
+                radius: radius, color: '#1a73e8', weight: 1, fillColor: '#1a73e8', fillOpacity: 0.1
             }).addTo(map);
 
-            // 2. Fetch Data from Overpass (Truly Free, No Key)
+            map.flyTo([lat, lon], 14, { animate: true, duration: 1.5 });
+
+            // 3. Fetch Data (Optimized Query)
             const query = `[out:json];node["amenity"~"hospital|clinic"](around:${radius},${lat},${lon});out;`;
             const url = `https://overpass-api.de/api/interpreter?data=${encodeURIComponent(query)}`;
 
             try {
                 const response = await fetch(url);
                 const data = await response.json();
-                renderList(data.elements, lat, lon);
+                
+                if (data.elements.length === 0) {
+                    statusLabel.innerText = "No hospitals found in 3km.";
+                    return;
+                }
+
+                renderHospitals(data.elements);
             } catch (error) {
-                document.getElementById('status').innerText = "⚠️ API Busy. Try again.";
+                statusLabel.innerText = "⚠️ Server busy. Try again.";
             }
         }
 
-        function renderList(hospitals, userLat, userLon) {
+        function renderHospitals(hospitals) {
             const listDiv = document.getElementById('hospital-list');
+            const statusLabel = document.getElementById('status');
             listDiv.innerHTML = "";
-            document.getElementById('status').innerText = `Found ${hospitals.length} facilities nearby`;
+            statusLabel.innerText = `Found ${hospitals.length} facilities near you`;
 
             hospitals.forEach(h => {
-                const name = h.tags.name || "Unnamed Clinic";
-                const type = h.tags.amenity.toUpperCase();
+                const name = h.tags.name || "Neighborhood Clinic";
+                const type = h.tags.amenity.charAt(0).toUpperCase() + h.tags.amenity.slice(1);
                 
-                // Add marker to map
-                const m = L.marker([h.lat, h.lon]).addTo(markersLayer).bindPopup(`<b>${name}</b>`);
+                // Add Permanent Marker
+                const marker = L.marker([h.lat, h.lon]).bindPopup(`<b>${name}</b>`);
+                markersLayer.addLayer(marker);
 
                 // Create Card
                 const card = document.createElement('div');
@@ -100,10 +138,15 @@
                 card.innerHTML = `
                     <h3>${name}</h3>
                     <p>Type: ${type}</p>
-                    <span class="tag">OPEN DATA</span>
-                    <p style="margin-top:10px;"><a href="https://www.google.com/maps/dir/?api=1&destination=${h.lat},${h.lon}" target="_blank" style="color:#1a73e8; text-decoration:none; font-weight:bold;">Get Directions →</a></p>
+                    <a class="directions" href="https://www.google.com/maps/dir/?api=1&destination=${h.lat},${h.lon}" target="_blank">↗ Get Directions</a>
                 `;
-                card.onclick = () => { map.flyTo([h.lat, h.lon], 16); m.openPopup(); };
+                
+                // Card click interaction
+                card.onclick = () => {
+                    map.flyTo([h.lat, h.lon], 16);
+                    marker.openPopup();
+                };
+                
                 listDiv.appendChild(card);
             });
         }
