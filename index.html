@@ -12,23 +12,36 @@
         #map { height: 45%; width: 100%; z-index: 1; background: #e5e3df; }
         .leaflet-control-attribution, .leaflet-control-zoom { display: none !important; }
 
-        .btn-locate { position: absolute; top: 20px; right: 20px; z-index: 1000; padding: 14px 28px; background: #1a73e8; color: white; border: none; font-weight: bold; cursor: pointer; border-radius: 50px; box-shadow: 0 4px 15px rgba(26, 115, 232, 0.4); font-size: 15px; }
+        /* Button & Loader */
+        .btn-locate { position: absolute; top: 20px; right: 20px; z-index: 1000; padding: 14px 28px; background: #1a73e8; color: white; border: none; font-weight: bold; cursor: pointer; border-radius: 50px; box-shadow: 0 4px 15px rgba(26, 115, 232, 0.4); font-size: 15px; display: flex; align-items: center; gap: 8px; }
+        .btn-locate:disabled { background: #8ab4f8; cursor: not-allowed; }
 
         .container { flex: 1; overflow-y: auto; padding: 15px; z-index: 2; border-top-left-radius: 20px; border-top-right-radius: 20px; margin-top: -20px; background: white; box-shadow: 0 -5px 15px rgba(0,0,0,0.05); }
         .hospital-grid { display: grid; gap: 12px; margin-top: 10px; }
         
-        .card { background: #f8f9fa; border-radius: 16px; padding: 18px; border: 1px solid #eee; }
+        .card { background: #f8f9fa; border-radius: 16px; padding: 18px; border: 1px solid #eee; position: relative; }
         .card h3 { margin: 0 0 4px 0; font-size: 17px; color: #1a73e8; font-weight: 700; }
-        .card p { margin: 0; font-size: 14px; color: #5f6368; }
+        .card p { margin: 0; font-size: 13px; color: #5f6368; }
+        .distance-badge { position: absolute; top: 18px; right: 18px; font-size: 12px; font-weight: bold; color: #188038; background: #e6f4ea; padding: 4px 8px; border-radius: 8px; }
         .nav-link { text-decoration: none; display: block; margin-top: 12px; font-weight: bold; color: #1a73e8; font-size: 14px; border-top: 1px solid #eee; padding-top: 10px; }
+
+        /* Spinner CSS */
+        .spinner { width: 18px; height: 18px; border: 3px solid rgba(255,255,255,0.3); border-radius: 50%; border-top-color: #fff; animation: spin 1s ease-in-out infinite; display: none; }
+        .list-spinner { width: 40px; height: 40px; border: 4px solid #f3f3f3; border-top: 4px solid #1a73e8; border-radius: 50%; animation: spin 1s linear infinite; margin: 40px auto; display: none; }
+        @keyframes spin { to { transform: rotate(360deg); } }
     </style>
 </head>
 <body>
 
-    <button class="btn-locate" onclick="getLocation()">📍 Find Nearby</button>
+    <button class="btn-locate" id="locateBtn" onclick="getLocation()">
+        <span id="btnText">📍 Find Nearby</span>
+        <div class="spinner" id="btnSpinner"></div>
+    </button>
+    
     <div id="map"></div>
 
     <div class="container">
+        <div id="listLoader" class="list-spinner"></div>
         <div id="hospital-list" class="hospital-grid">
             <p style="text-align:center; color:#999; margin-top:20px;">Tap the button to find hospitals</p>
         </div>
@@ -44,10 +57,47 @@
             L.tileLayer('https://{s}.tile.openstreetmap.org/{z}/{x}/{y}.png').addTo(map);
         });
 
+        // Haversine formula for distance calculation
+        function getDistance(lat1, lon1, lat2, lon2) {
+            const R = 6371; 
+            const dLat = (lat2 - lat1) * Math.PI / 180;
+            const dLon = (lon2 - lon1) * Math.PI / 180;
+            const a = Math.sin(dLat/2) * Math.sin(dLat/2) +
+                      Math.cos(lat1 * Math.PI / 180) * Math.cos(lat2 * Math.PI / 180) * Math.sin(dLon/2) * Math.sin(dLon/2);
+            const c = 2 * Math.atan2(Math.sqrt(a), Math.sqrt(1-a));
+            return (R * c).toFixed(1); 
+        }
+
+        function toggleLoading(isLoading) {
+            const btn = document.getElementById('locateBtn');
+            const btnText = document.getElementById('btnText');
+            const btnSpinner = document.getElementById('btnSpinner');
+            const listLoader = document.getElementById('listLoader');
+            const listDiv = document.getElementById('hospital-list');
+
+            if(isLoading) {
+                btn.disabled = true;
+                btnText.innerText = "Searching...";
+                btnSpinner.style.display = "block";
+                listLoader.style.display = "block";
+                listDiv.style.opacity = "0.3";
+            } else {
+                btn.disabled = false;
+                btnText.innerText = "📍 Find Nearby";
+                btnSpinner.style.display = "none";
+                listLoader.style.display = "none";
+                listDiv.style.opacity = "1";
+            }
+        }
+
         function getLocation() {
+            toggleLoading(true);
             navigator.geolocation.getCurrentPosition(
                 (pos) => { startSearch(pos.coords.latitude, pos.coords.longitude); },
-                (err) => { alert("Please enable GPS/Location in your settings."); },
+                (err) => { 
+                    toggleLoading(false);
+                    alert("Please enable GPS/Location."); 
+                },
                 { enableHighAccuracy: true, timeout: 10000 }
             );
         }
@@ -55,31 +105,19 @@
         async function startSearch(lat, lon, attempt = 1) {
             const radius = 4000; 
             
-            // 1. CLEAR & REDRAW USER LOCATION (The "Safest" Way)
-            if(userMarker) map.removeLayer(userMarker);
-            if(radiusCircle) map.removeLayer(radiusCircle);
-            markersLayer.clearLayers();
+            if(attempt === 1) {
+                if(userMarker) map.removeLayer(userMarker);
+                if(radiusCircle) map.removeLayer(radiusCircle);
+                markersLayer.clearLayers();
 
-            // Native Leaflet CircleMarker (Always visible, blue dot)
-            userMarker = L.circleMarker([lat, lon], {
-                radius: 9,
-                fillColor: "#1a73e8",
-                color: "white",
-                weight: 3,
-                opacity: 1,
-                fillOpacity: 0.9
-            }).addTo(map).bindPopup("Your Location");
+                userMarker = L.circleMarker([lat, lon], {
+                    radius: 9, fillColor: "#1a73e8", color: "white", weight: 3, fillOpacity: 0.9
+                }).addTo(map);
 
-            radiusCircle = L.circle([lat, lon], { 
-                radius: radius, 
-                color: '#1a73e8', 
-                weight: 1, 
-                fillOpacity: 0.05 
-            }).addTo(map);
+                radiusCircle = L.circle([lat, lon], { radius: radius, color: '#1a73e8', weight: 1, fillOpacity: 0.05 }).addTo(map);
+                map.flyTo([lat, lon], 14);
+            }
 
-            map.flyTo([lat, lon], 14);
-
-            // 2. FETCH DATA
             const query = `[out:json][timeout:15];node["amenity"~"hospital|clinic"](around:${radius},${lat},${lon});out;`;
             const url = `https://overpass-api.de/api/interpreter?data=${encodeURIComponent(query)}`;
 
@@ -87,26 +125,31 @@
                 const response = await fetch(url);
                 if (!response.ok) throw new Error("Retry");
                 const data = await response.json();
-                renderHospitals(data.elements);
+                renderHospitals(data.elements, lat, lon);
+                toggleLoading(false);
             } catch (error) {
                 if(attempt < 3) {
                     setTimeout(() => startSearch(lat, lon, attempt + 1), 1000);
+                } else {
+                    toggleLoading(false);
+                    alert("Server busy. Please try again in a moment.");
                 }
             }
         }
 
-        function renderHospitals(hospitals) {
+        function renderHospitals(hospitals, uLat, uLon) {
             const listDiv = document.getElementById('hospital-list');
             listDiv.innerHTML = ""; 
 
             if (hospitals.length === 0) {
-                listDiv.innerHTML = "<p style='text-align:center;'>No hospitals found in this 4km radius.</p>";
+                listDiv.innerHTML = "<p style='text-align:center;'>No hospitals found.</p>";
                 return;
             }
 
             hospitals.forEach(h => {
                 const name = h.tags.name || "General Clinic";
                 const type = h.tags.amenity.toUpperCase();
+                const dist = getDistance(uLat, uLon, h.lat, h.lon);
                 
                 const marker = L.marker([h.lat, h.lon]).addTo(markersLayer).bindPopup(`<b>${name}</b>`);
 
@@ -116,6 +159,7 @@
                     <div onclick="map.flyTo([${h.lat}, ${h.lon}], 16); marker.openPopup();">
                         <h3>${name}</h3>
                         <p>${type}</p>
+                        <span class="distance-badge">${dist} km</span>
                     </div>
                     <a class="nav-link" href="https://www.google.com/maps/dir/?api=1&destination=${h.lat},${h.lon}" target="_blank">↗ Get Directions</a>
                 `;
